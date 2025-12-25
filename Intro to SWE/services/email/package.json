@@ -1,9 +1,0 @@
-{
-  "name": "email",
-  "version": "1.0.0",
-  "main": "src/sendEmail.js",
-  "dependencies": {
-    "amqplib": "^0.10.3",
-    "nodemailer": "^6.9.4"
-  }
-}
