@@ -1,0 +1,176 @@
+version: "3.8"
+services:
+  traefik:
+    image: traefik:v2.10
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: marketplace
+      POSTGRES_USER: marketplace
+      POSTGRES_PASSWORD: marketplace
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketplace"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:21.1.1
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/marketplace
+      KC_DB_USERNAME: marketplace
+      KC_DB_PASSWORD: marketplace
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY: edge
+    command: start-dev --import-realm
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  orders:
+    build:
+      context: .
+      dockerfile: ./services/orders/Dockerfile
+    environment:
+      DATABASE_URL: postgres://marketplace:marketplace@postgres:5432/marketplace
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: marketplace
+    ports:
+      - "3000:3000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.orders.rule=Host(`api.localhost`)"
+      - "traefik.http.services.orders.loadbalancer.server.port=3000"
+
+  inventory:
+    build:
+      context: .
+      dockerfile: ./services/inventory/Dockerfile
+    environment:
+      DATABASE_URL: postgres://marketplace:marketplace@postgres:5432/marketplace
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: marketplace
+    ports:
+      - "3004:3004"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.inventory.rule=Host(`inventory.localhost`)"
+      - "traefik.http.services.inventory.loadbalancer.server.port=3004"
+
+  payments:
+    build:
+      context: .
+      dockerfile: ./services/payments/Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      PAYPAL_CLIENT_ID: your-client-id
+      PAYPAL_CLIENT_SECRET: your-client-secret
+      PAYPAL_MODE: sandbox
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: marketplace
+    ports:
+      - "3002:3002"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.payments.rule=Host(`payments.localhost`)"
+      - "traefik.http.services.payments.loadbalancer.server.port=3002"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ./services/frontend/Dockerfile
+    environment:
+      VITE_KEYCLOAK_URL: http://localhost:8081
+      VITE_KEYCLOAK_REALM: marketplace
+      VITE_KEYCLOAK_CLIENT_ID: marketplace-web
+    ports:
+      - "3001:80"
+    depends_on:
+      - orders
+      - inventory
+      - cart
+      - keycloak
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`app.localhost`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+  
+  cart:
+    build:
+      context: .
+      dockerfile: ./services/cart/Dockerfile
+    environment:
+      DATABASE_URL: postgres://marketplace:marketplace@postgres:5432/marketplace
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: marketplace
+    ports:
+      - "3005:3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cart.rule=Host(`cart.localhost`)"
+      - "traefik.http.services.cart.loadbalancer.server.port=3005"
+
+volumes:
+  pgdata:
