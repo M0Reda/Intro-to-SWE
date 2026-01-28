@@ -63,8 +63,8 @@ The application follows a microservices architecture with the following services
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/marketplace.git
-cd marketplace
+git clone https://github.com/M0Reda/Intro-to-SWE.git
+cd Intro-to-SWE
 ```
 
 ### 2. Start all services with Docker Compose
